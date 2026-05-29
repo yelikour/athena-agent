@@ -34,6 +34,8 @@ Examples:
   athena --memory-save "content"  # Save to memory
   athena --memory-list            # List recent memories
   athena --list-tools             # List available tools
+  athena --health                 # System health check
+  athena --cron list              # List scheduled jobs
         """
     )
     
@@ -88,12 +90,51 @@ Examples:
         help="Clear all memories and exit"
     )
     
+    # Session options
+    session_group = parser.add_argument_group("Sessions")
+    session_group.add_argument(
+        "--sessions",
+        action="store_true",
+        help="List recent sessions and exit"
+    )
+    session_group.add_argument(
+        "--session-new",
+        metavar="TITLE",
+        help="Create a new session and exit"
+    )
+    session_group.add_argument(
+        "--session-continue",
+        metavar="ID",
+        help="Continue a previous session"
+    )
+    
     # Tool options
     tool_group = parser.add_argument_group("Tools")
     tool_group.add_argument(
         "--list-tools",
         action="store_true",
         help="List available tools and exit"
+    )
+    
+    # Cron options
+    cron_group = parser.add_argument_group("Cron Jobs")
+    cron_group.add_argument(
+        "--cron",
+        choices=["list", "status"],
+        help="Cron operations"
+    )
+    
+    # System options
+    system_group = parser.add_argument_group("System")
+    system_group.add_argument(
+        "--health",
+        action="store_true",
+        help="Run system health check and exit"
+    )
+    system_group.add_argument(
+        "--providers",
+        action="store_true",
+        help="List available LLM providers"
     )
     
     # General options
@@ -105,7 +146,7 @@ Examples:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0"
+        version="%(prog)s 0.2.0"
     )
     
     args = parser.parse_args()
@@ -118,7 +159,7 @@ Examples:
         memory_path=args.memory_path,
     )
     
-    # Memory operations (non-interactive)
+    # Handle commands
     if args.memory_search:
         _handle_memory_search(agent, args.memory_search, args.memory_category)
         return
@@ -139,13 +180,32 @@ Examples:
         _handle_memory_clear(agent, args.memory_category)
         return
     
-    # Tool operations
     if args.list_tools:
         _handle_list_tools(agent)
         return
     
+    if args.sessions:
+        _handle_sessions(agent)
+        return
+    
+    if args.session_new:
+        _handle_session_new(agent, args.session_new)
+        return
+    
+    if args.cron:
+        _handle_cron(args.cron)
+        return
+    
+    if args.health:
+        _handle_health()
+        return
+    
+    if args.providers:
+        _handle_providers()
+        return
+    
     # Interactive chat mode
-    _run_interactive_chat(agent)
+    _run_interactive_chat(agent, args.session_continue)
 
 
 def _handle_memory_search(agent: Agent, query: str, category: str):
@@ -203,7 +263,7 @@ def _handle_list_tools(agent: Agent):
     if tools:
         print(f"🔧 Available tools ({len(tools)}):\n")
         for name, info in tools.items():
-            print(f"  {name}: {info['description']}")
+            print(f"  {name}: {info['description'][:60]}")
             if info['parameters']:
                 params = ", ".join(info['parameters'].keys())
                 print(f"    └─ Parameters: {params}")
@@ -211,10 +271,116 @@ def _handle_list_tools(agent: Agent):
         print("No tools registered.")
 
 
-def _run_interactive_chat(agent: Agent):
+def _handle_sessions(agent: Agent):
+    """Handle sessions list command."""
+    from .sessions import SessionManager
+    manager = SessionManager()
+    sessions = manager.list_sessions(limit=10)
+    
+    if sessions:
+        print(f"📋 Recent sessions ({len(sessions)}):\n")
+        for s in sessions:
+            print(f"  {s.id[:20]}...")
+            print(f"    Title: {s.title}")
+            print(f"    Messages: {s.message_count}")
+            print(f"    Updated: {s.updated_at[:19]}")
+    else:
+        print("No sessions yet.")
+
+
+def _handle_session_new(agent: Agent, title: str):
+    """Handle session new command."""
+    from .sessions import SessionManager
+    manager = SessionManager()
+    session = manager.create_session(title)
+    print(f"✅ Created session: {session.id}")
+    print(f"   Use 'athena --session-continue {session.id}' to continue")
+
+
+def _handle_cron(action: str):
+    """Handle cron commands."""
+    from .cron import CronScheduler
+    scheduler = CronScheduler()
+    
+    if action == "list":
+        jobs = scheduler.list_jobs()
+        if jobs:
+            print(f"⏰ Scheduled jobs ({len(jobs)}):\n")
+            for job in jobs:
+                status = "✓" if job.enabled else "✗"
+                print(f"  {status} {job.name}")
+                print(f"    Schedule: {job.schedule}")
+                print(f"    Last run: {job.last_run or 'Never'}")
+        else:
+            print("No scheduled jobs.")
+    
+    elif action == "status":
+        print("Cron scheduler status: Ready")
+
+
+def _handle_health():
+    """Handle health check command."""
+    from .monitor import SystemMonitor
+    monitor = SystemMonitor()
+    health = monitor.health_check()
+    
+    print("🏥 System Health Check\n")
+    print(f"  Score: {health['health_score']}/100 ({health['health_status']})")
+    print(f"  OS: {health['system']['os']} {health['system']['os_version'][:30]}")
+    print(f"  CPU: {health['cpu_percent']}%")
+    print(f"  Memory: {health['memory']['percent']}%")
+    print(f"  Disk: {health['disk']['percent']}%")
+    
+    if health['gpu']:
+        print(f"  GPU: {health['gpu']['name']}")
+        print(f"  GPU Temp: {health['gpu']['temperature_c']}°C")
+    
+    print(f"\n  Network:")
+    print(f"    Internet: {'✓' if health['network']['internet'] else '✗'}")
+    print(f"    Ollama: {'✓' if health['network']['ollama'] else '✗'}")
+
+
+def _handle_providers():
+    """Handle providers list command."""
+    from .providers import create_default_registry
+    registry = create_default_registry()
+    
+    providers = registry.list_providers()
+    if providers:
+        print(f"🤖 LLM Providers ({len(providers)}):\n")
+        for name, available in providers.items():
+            status = "✓ Available" if available else "✗ Not configured"
+            print(f"  {name}: {status}")
+    else:
+        print("No providers registered.")
+
+
+def _run_interactive_chat(agent: Agent, session_id: Optional[str] = None):
     """Run interactive chat mode."""
-    print("🏛️ Athena v0.1.0 - Lightweight Local AI Agent")
+    from .sessions import SessionManager
+    manager = SessionManager()
+    
+    # Create or continue session
+    if session_id:
+        session = manager.get_session(session_id)
+        if not session:
+            print(f"❌ Session not found: {session_id}")
+            return
+        print(f"📋 Continuing session: {session.title}")
+        
+        # Load history
+        messages = manager.get_messages(session_id)
+        for msg in messages:
+            agent.conversation_history.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+    else:
+        session = manager.create_session("Chat", model=agent.model)
+    
+    print("\n🏛️ Athena v0.2.0 - Lightweight Local AI Agent")
     print(f"   Model: {agent.model}")
+    print(f"   Session: {session.id[:20]}...")
     print(f"   Memory: {agent.memory.db_path}")
     print(f"   Tools: {len(agent.tools.tools)} available")
     print("\n   Commands: 'quit' to exit, 'clear' to reset, 'memory' for info\n")
@@ -246,8 +412,20 @@ def _run_interactive_chat(agent: Agent):
                     print()
                     continue
                 
+                if user_input.lower() == "health":
+                    _handle_health()
+                    print()
+                    continue
+                
+                # Save user message
+                manager.add_message(session.id, "user", user_input)
+                
                 # Get response
                 response = agent.chat(user_input)
+                
+                # Save assistant response
+                manager.add_message(session.id, "assistant", response)
+                
                 print(f"\nAthena: {response}\n")
                 
             except LLMConnectionError as e:

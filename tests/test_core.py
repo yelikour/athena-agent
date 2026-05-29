@@ -8,6 +8,9 @@ from pathlib import Path
 from athena.memory import Memory, MemoryError
 from athena.tools import ToolRegistry, Tool, ToolError
 from athena.agent import Agent, LLMConnectionError
+from athena.sessions import SessionManager, Session
+from athena.cron import CronScheduler, CronJob, JobStatus, CronParser
+from athena.web import WebSearcher, URLFetcher
 
 
 class TestMemory:
@@ -50,7 +53,7 @@ class TestMemory:
         """Test deleting memories."""
         memory_id = self.memory.save("To be deleted")
         assert self.memory.delete(memory_id)
-        assert not self.memory.delete(99999)  # Non-existent
+        assert not self.memory.delete(99999)
     
     def test_count(self):
         """Test counting memories."""
@@ -124,7 +127,7 @@ class TestTool:
         
         tool = Tool(greet, "greet")
         with pytest.raises(ToolError):
-            tool.execute()  # Missing 'name'
+            tool.execute()
 
 
 class TestToolRegistry:
@@ -224,16 +227,13 @@ class TestAgent:
     
     def test_parse_tool_args(self):
         """Test tool argument parsing."""
-        # Single quotes
         args = Agent._parse_tool_args("name='hello', count=5")
         assert args["name"] == "hello"
         assert args["count"] == 5
         
-        # Double quotes
         args = Agent._parse_tool_args('name="world"')
         assert args["name"] == "world"
         
-        # No args
         args = Agent._parse_tool_args("")
         assert args == {}
     
@@ -243,3 +243,145 @@ class TestAgent:
         assert Agent._format_size(1500) == "1.5KB"
         assert Agent._format_size(1_500_000) == "1.4MB"
         assert Agent._format_size(1_500_000_000) == "1.4GB"
+
+
+class TestSessions:
+    """Test Session Manager."""
+    
+    def setup_method(self):
+        """Setup test database."""
+        self.tmp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.tmp_dir) / "test_sessions.db"
+        self.manager = SessionManager(str(self.db_path))
+    
+    def test_create_session(self):
+        """Test creating a session."""
+        session = self.manager.create_session("Test Session")
+        assert session.id.startswith("session_")
+        assert session.title == "Test Session"
+    
+    def test_get_session(self):
+        """Test getting a session."""
+        session = self.manager.create_session("Test")
+        retrieved = self.manager.get_session(session.id)
+        assert retrieved is not None
+        assert retrieved.title == "Test"
+    
+    def test_list_sessions(self):
+        """Test listing sessions."""
+        self.manager.create_session("Session 1")
+        self.manager.create_session("Session 2")
+        
+        sessions = self.manager.list_sessions()
+        assert len(sessions) == 2
+    
+    def test_add_message(self):
+        """Test adding messages."""
+        session = self.manager.create_session("Test")
+        
+        self.manager.add_message(session.id, "user", "Hello")
+        self.manager.add_message(session.id, "assistant", "Hi there!")
+        
+        messages = self.manager.get_messages(session.id)
+        assert len(messages) == 2
+        assert messages[0].role == "user"
+        assert messages[1].role == "assistant"
+    
+    def test_delete_session(self):
+        """Test deleting a session."""
+        session = self.manager.create_session("To Delete")
+        assert self.manager.delete_session(session.id)
+        assert self.manager.get_session(session.id) is None
+    
+    def test_export_import(self):
+        """Test export and import."""
+        session = self.manager.create_session("Export Test")
+        self.manager.add_message(session.id, "user", "Test message")
+        
+        exported = self.manager.export_session(session.id)
+        assert exported is not None
+        
+        # Import
+        imported = self.manager.import_session(exported)
+        assert imported is not None
+        assert imported.title == "Export Test"
+
+
+class TestCron:
+    """Test Cron Scheduler."""
+    
+    def setup_method(self):
+        """Setup test scheduler."""
+        self.tmp_dir = tempfile.mkdtemp()
+        self.storage_path = Path(self.tmp_dir) / "test_cron.json"
+        self.scheduler = CronScheduler(str(self.storage_path))
+    
+    def test_add_job(self):
+        """Test adding a job."""
+        job = self.scheduler.add_job("test", "echo hello", schedule="every 1h")
+        assert job.name == "test"
+        assert job.schedule == "every 1h"
+    
+    def test_list_jobs(self):
+        """Test listing jobs."""
+        self.scheduler.add_job("job1", "echo 1")
+        self.scheduler.add_job("job2", "echo 2")
+        
+        jobs = self.scheduler.list_jobs()
+        assert len(jobs) == 2
+    
+    def test_pause_resume(self):
+        """Test pausing and resuming jobs."""
+        job = self.scheduler.add_job("test", "echo hello")
+        
+        assert self.scheduler.pause_job(job.id)
+        paused = self.scheduler.get_job(job.id)
+        assert not paused.enabled
+        
+        assert self.scheduler.resume_job(job.id)
+        resumed = self.scheduler.get_job(job.id)
+        assert resumed.enabled
+    
+    def test_remove_job(self):
+        """Test removing a job."""
+        job = self.scheduler.add_job("test", "echo hello")
+        assert self.scheduler.remove_job(job.id)
+        assert self.scheduler.get_job(job.id) is None
+    
+    def test_parse_interval(self):
+        """Test interval parsing."""
+        assert CronParser.parse_interval("30m") == 1800
+        assert CronParser.parse_interval("2h") == 7200
+        assert CronParser.parse_interval("1d") == 86400
+        assert CronParser.parse_interval("every 5m") == 300
+    
+    def test_parse_cron(self):
+        """Test cron expression parsing."""
+        result = CronParser.parse_cron("0 * * * *")
+        assert result is not None
+        assert result["minute"] == "0"
+        assert result["hour"] == "*"
+    
+    def test_persistence(self):
+        """Test job persistence."""
+        self.scheduler.add_job("persistent", "echo test")
+        
+        # Create new scheduler with same storage
+        scheduler2 = CronScheduler(str(self.storage_path))
+        jobs = scheduler2.list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].name == "persistent"
+
+
+class TestWeb:
+    """Test Web tools."""
+    
+    def test_searcher_init(self):
+        """Test searcher initialization."""
+        searcher = WebSearcher()
+        assert searcher.timeout == 10
+    
+    def test_fetcher_init(self):
+        """Test fetcher initialization."""
+        fetcher = URLFetcher()
+        assert fetcher.timeout == 15

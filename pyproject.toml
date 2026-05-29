@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "athena-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "A lightweight, privacy-first local AI agent framework"
 readme = "README.md"
 license = "MIT"
@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "夜理" }
 ]
-keywords = ["ai", "agent", "llm", "local", "privacy", "mcp"]
+keywords = ["ai", "agent", "llm", "local", "privacy", "mcp", "ollama"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -25,6 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.25.0",
+    "psutil>=5.9.0",
 ]
 
 [project.optional-dependencies]
@@ -32,14 +33,17 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+telegram = [
+    "python-telegram-bot>=20.0",
+]
 
 [project.scripts]
 athena = "athena.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yeli/athena-agent"
-Repository = "https://github.com/yeli/athena-agent"
-Issues = "https://github.com/yeli/athena-agent/issues"
+Homepage = "https://github.com/yelikour/athena-agent"
+Repository = "https://github.com/yelikour/athena-agent"
+Issues = "https://github.com/yelikour/athena-agent/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["athena"]

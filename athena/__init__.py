@@ -1,11 +1,11 @@
 """
 Athena - Lightweight Local AI Agent
 
-A minimal, privacy-first AI agent framework powered by Ollama.
+A minimal, privacy-first AI agent framework with multi-provider support.
 
 Example:
     >>> from athena import Agent
-    >>> agent = Agent(model="llama3.2:3b")
+    >>> agent = Agent()  # Auto-detect best provider
     >>> response = agent.chat("Hello!")
     >>> print(response)
 """
@@ -26,7 +26,7 @@ from .cron import CronScheduler, CronJob, JobStatus
 # Providers
 from .providers import (
     Provider, ProviderConfig, ProviderRegistry,
-    OllamaProvider, OpenAIProvider, DeepSeekProvider, MoonshotProvider,
+    OpenAICompatibleProvider, OllamaProvider,
     create_default_registry,
 )
 
@@ -63,10 +63,8 @@ __all__ = [
     "Provider",
     "ProviderConfig",
     "ProviderRegistry",
+    "OpenAICompatibleProvider",
     "OllamaProvider",
-    "OpenAIProvider",
-    "DeepSeekProvider",
-    "MoonshotProvider",
     "create_default_registry",
     
     # Web

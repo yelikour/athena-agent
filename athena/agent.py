@@ -12,6 +12,7 @@ import logging
 
 from .memory import Memory
 from .tools import ToolRegistry
+from .providers import ProviderRegistry, Provider, create_default_registry
 
 logger = logging.getLogger(__name__)
 
@@ -34,45 +35,81 @@ class ToolExecutionError(AgentError):
 class Agent:
     """
     A minimal AI agent with:
-    - Local LLM inference (via Ollama)
+    - Multi-provider LLM support (API + local)
     - Persistent memory (SQLite)
     - Tool calling (MCP-compatible)
     
     Example:
-        >>> agent = Agent(model="llama3.2:3b")
+        >>> agent = Agent()  # Auto-detect best provider
         >>> response = agent.chat("What's the weather like?")
         >>> print(response)
     """
     
     def __init__(
         self,
-        model: str = "llama3.2:3b",
-        ollama_url: str = "http://localhost:11434",
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
         memory_path: str = "~/.athena/memory.db",
         system_prompt: Optional[str] = None,
         max_tool_rounds: int = 5,
+        skip_provider_init: bool = False,
     ):
         """
         Initialize the Agent.
         
         Args:
-            model: Ollama model name
-            ollama_url: Ollama API endpoint
+            provider: Provider name (None = auto-detect best)
+            model: Model override (None = use provider default)
             memory_path: Path to SQLite memory database
             system_prompt: Custom system prompt
             max_tool_rounds: Maximum tool call rounds per query
+            skip_provider_init: Skip provider initialization (for testing)
         """
-        self.model = model
-        self.ollama_url = ollama_url.rstrip("/")
         self.memory = Memory(memory_path)
         self.tools = ToolRegistry()
         self.conversation_history: List[Dict[str, str]] = []
         self.max_tool_rounds = max_tool_rounds
+        self._provider = None
+        
+        if not skip_provider_init:
+            # Initialize provider registry
+            self.registry = create_default_registry()
+            
+            # Select provider
+            if provider:
+                self._provider = self.registry.get(provider)
+                if not self._provider:
+                    raise ValueError(f"Provider '{provider}' not available")
+            else:
+                self._provider = self.registry.get_best()
+                if not self._provider:
+                    raise LLMConnectionError(
+                        "No LLM provider available.\n"
+                        "Set up an API key or start Ollama:\n"
+                        "  - Export DEEPSEEK_API_KEY=...\n"
+                        "  - Or run: ollama serve"
+                    )
+            
+            # Override model if specified
+            if model:
+                self._provider.config.model = model
         
         self.system_prompt = system_prompt or self._default_system_prompt()
         
         # Register built-in tools
         self._register_builtin_tools()
+    
+    @property
+    def model(self) -> str:
+        """Get current model name."""
+        if self._provider:
+            return f"{self._provider.name}/{self._provider.config.model}"
+        return "none"
+    
+    @property
+    def provider_name(self) -> str:
+        """Get current provider name."""
+        return self._provider.name if self._provider else "none"
     
     def _default_system_prompt(self) -> str:
         """Generate default system prompt."""
@@ -94,7 +131,8 @@ After receiving tool results, summarize them for the user.
 - Be concise and helpful
 - Think step by step for complex tasks
 - Admit when you don't know something
-- Always be honest and transparent"""
+- Always be honest and transparent
+- Respond in the same language as the user"""
     
     def _register_builtin_tools(self):
         """Register built-in tools."""
@@ -149,7 +187,7 @@ After receiving tool results, summarize them for the user.
                 file_path = Path(path).expanduser()
                 if not file_path.exists():
                     return f"Error: File not found: {path}"
-                if file_path.stat().st_size > 1_000_000:  # 1MB limit
+                if file_path.stat().st_size > 1_000_000:
                     return "Error: File too large (>1MB)"
                 return file_path.read_text(encoding="utf-8")[:5000]
             except Exception as e:
@@ -169,7 +207,7 @@ After receiving tool results, summarize them for the user.
                     prefix = "📁" if item.is_dir() else "📄"
                     size = item.stat().st_size if item.is_file() else 0
                     items.append(f"{prefix} {item.name} ({self._format_size(size)})")
-                return "\n".join(items[:50])  # Limit to 50 items
+                return "\n".join(items[:50])
             except Exception as e:
                 return f"Error listing files: {str(e)}"
     
@@ -191,10 +229,10 @@ After receiving tool results, summarize them for the user.
             
         Returns:
             Assistant's response
-            
-        Raises:
-            LLMConnectionError: If cannot connect to Ollama
         """
+        if not self._provider:
+            return "Error: No LLM provider configured"
+        
         # Add user message
         self.conversation_history.append({
             "role": "user",
@@ -208,9 +246,7 @@ After receiving tool results, summarize them for the user.
             
             # Call LLM
             try:
-                response = self._call_llm(messages)
-            except LLMConnectionError:
-                raise
+                response = self._provider.chat(messages)
             except Exception as e:
                 logger.error(f"LLM call failed: {e}")
                 response = f"I encountered an error: {str(e)}"
@@ -250,36 +286,6 @@ After receiving tool results, summarize them for the user.
         
         messages.extend(self.conversation_history)
         return messages
-    
-    def _call_llm(self, messages: List[Dict[str, str]]) -> str:
-        """Call Ollama API."""
-        import httpx
-        
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                response = client.post(
-                    f"{self.ollama_url}/api/chat",
-                    json={
-                        "model": self.model,
-                        "messages": messages,
-                        "stream": False,
-                        "options": {
-                            "temperature": 0.7,
-                            "num_predict": 2048,
-                        }
-                    }
-                )
-                response.raise_for_status()
-                return response.json()["message"]["content"]
-        except httpx.ConnectError:
-            raise LLMConnectionError(
-                "Cannot connect to Ollama. Is it running?\n"
-                "Start it with: ollama serve"
-            )
-        except httpx.HTTPStatusError as e:
-            raise LLMConnectionError(f"Ollama API error: {e.response.status_code}")
-        except Exception as e:
-            raise LLMConnectionError(f"Unexpected error: {str(e)}")
     
     def _handle_tool_calls(self, response: str, original_query: str) -> str:
         """Parse and execute tool calls from LLM response."""
@@ -321,7 +327,7 @@ After receiving tool results, summarize them for the user.
                 )}
             ]
             try:
-                return self._call_llm(summary_messages)
+                return self._provider.chat(summary_messages)
             except Exception as e:
                 return f"Tools executed:\n{tool_results}\n\n(Summary generation failed: {e})"
         
@@ -362,7 +368,6 @@ After receiving tool results, summarize them for the user.
         """Retrieve a value from persistent memory."""
         results = self.memory.search(key, limit=1, category=category)
         if results:
-            # Extract value after colon
             content = results[0]["content"]
             if ": " in content:
                 return content.split(": ", 1)[1]

@@ -209,16 +209,15 @@ class TestAgent:
     def test_agent_init(self):
         """Test agent initialization."""
         agent = Agent(
-            model="test-model",
-            memory_path=str(self.db_path)
+            memory_path=str(self.db_path),
+            skip_provider_init=True
         )
-        assert agent.model == "test-model"
         assert agent.memory is not None
         assert agent.tools is not None
     
     def test_builtin_tools_registered(self):
         """Test that built-in tools are registered."""
-        agent = Agent(memory_path=str(self.db_path))
+        agent = Agent(memory_path=str(self.db_path), skip_provider_init=True)
         tool_names = list(agent.tools.tools.keys())
         assert "memory_search" in tool_names
         assert "memory_save" in tool_names
@@ -301,7 +300,6 @@ class TestSessions:
         exported = self.manager.export_session(session.id)
         assert exported is not None
         
-        # Import
         imported = self.manager.import_session(exported)
         assert imported is not None
         assert imported.title == "Export Test"
@@ -366,7 +364,6 @@ class TestCron:
         """Test job persistence."""
         self.scheduler.add_job("persistent", "echo test")
         
-        # Create new scheduler with same storage
         scheduler2 = CronScheduler(str(self.storage_path))
         jobs = scheduler2.list_jobs()
         assert len(jobs) == 1
